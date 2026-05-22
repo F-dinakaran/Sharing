@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register | Heartogether</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body class="auth-body">
+  <div class="auth-card">
+
+    <div class="logo" style="margin-bottom: 20px;">♥ Heartogether</div>
+
+    <h2>Create account</h2>
+
+    <p class="muted">
+      Join a calm and supportive space designed for cardiac patients
+      and healthcare professionals.
+    </p>
+
+    <form id="registerForm">
+
+      <input
+        type="text"
+        id="fullName"
+        placeholder="Full name"
+        required
+      />
+
+      <input
+        type="email"
+        id="email"
+        placeholder="Email address"
+        required
+      />
+
+      <input
+        type="password"
+        id="password"
+        placeholder="Password - minimum 6 characters"
+        minlength="6"
+        required
+      />
+
+      <select id="role" required>
+        <option value="">Select role</option>
+        <option value="doctor">Doctor</option>
+        <option value="patient">Patient</option>
+      </select>
+
+      <input
+        type="text"
+        id="speciality"
+        placeholder="Speciality, e.g. Cardiologist"
+      />
+
+      <input
+        type="number"
+        id="age"
+        placeholder="Patient age"
+      />
+
+      <input
+        type="text"
+        id="condition"
+        placeholder="Condition, e.g. Arrhythmia"
+      />
+
+      <label class="terms-check">
+        <input type="checkbox" id="termsAccepted" required />
+
+        <span>
+          I agree to the
+          <button
+            type="button"
+            class="terms-link"
+            onclick="openTerms()"
+          >
+            Terms and Conditions
+          </button>
+
+          and understand that Heartogether is not an emergency service.
+        </span>
+      </label>
+
+      <button type="submit" class="btn primary full">
+        Create account
+      </button>
+    </form>
+
+    <p id="message" class="message"></p>
+
+    <p class="switch">
+      Already have an account?
+      <a href="login.html">Login</a>
+    </p>
+  </div>
+
+  <div id="termsModal" class="modal hidden">
+    <div class="modal-content">
+
+      <h2>Heartogether Terms and Conditions</h2>
+
+      <p>
+        Heartogether is a communication platform designed for educational
+        and non-emergency communication between cardiac patients and
+        healthcare professionals.
+      </p>
+
+      <h3>1. Not an emergency service</h3>
+
+      <p>
+        Heartogether must not be used for medical emergencies.
+        In case of chest pain, breathing difficulty, fainting,
+        severe symptoms, or urgent medical danger, users must contact
+        emergency services immediately.
+      </p>
+
+      <h3>2. Medical information</h3>
+
+      <p>
+        Information shared through the platform should be accurate
+        and respectful. Doctors and patients are responsible for
+        the information they provide.
+      </p>
+
+      <h3>3. Privacy and communication</h3>
+
+      <p>
+        Private chats are intended to be visible only between the
+        selected doctor and patient. Community chats are visible
+        to all registered users.
+      </p>
+
+      <h3>4. Appropriate use</h3>
+
+      <p>
+        Users must not share offensive, harmful, misleading,
+        abusive or inappropriate content.
+      </p>
+
+      <h3>5. Educational project notice</h3>
+
+      <p>
+        This version of Heartogether is a student project/demo
+        and should not be used as a real clinical healthcare system.
+      </p>
+
+      <button
+        class="btn primary full"
+        onclick="closeTerms()"
+      >
+        I understand
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("registerForm");
+    const message = document.getElementById("message");
+    const roleSelect = document.getElementById("role");
+
+    const speciality = document.getElementById("speciality");
+    const age = document.getElementById("age");
+    const condition = document.getElementById("condition");
+
+    roleSelect.addEventListener("change", () => {
+
+      if (roleSelect.value === "doctor") {
+        speciality.style.display = "block";
+
+        age.style.display = "none";
+        condition.style.display = "none";
+
+      } else if (roleSelect.value === "patient") {
+
+        speciality.style.display = "none";
+
+        age.style.display = "block";
+        condition.style.display = "block";
+      }
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const termsAccepted =
+        document.getElementById("termsAccepted").checked;
+
+      if (!termsAccepted) {
+        message.textContent =
+          "You must accept the Terms and Conditions.";
+
+        message.className = "message error";
+        return;
+      }
+
+      const data = {
+        fullName: document.getElementById("fullName").value,
+
+        email: document.getElementById("email").value,
+
+        password: document.getElementById("password").value,
+
+        role: roleSelect.value,
+
+        speciality: speciality.value,
+
+        age: age.value,
+
+        condition: condition.value,
+
+        termsAccepted
+      };
+
+      try {
+        const res = await fetch("/api/register", {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json"
+          },
+
+          body: JSON.stringify(data)
+        });
+
+        const result = await res.json();
+
+        if (!res.ok) {
+          message.textContent =
+            result.error ||
+            result.message ||
+            "Registration failed.";
+
+          message.className = "message error";
+          return;
+        }
+
+        localStorage.setItem("token", result.token);
+
+        localStorage.setItem(
+          "user",
+          JSON.stringify(result.user)
+        );
+
+        window.location.href = "dashboard.html";
+
+      } catch {
+
+        message.textContent =
+          "Could not connect to server.";
+
+        message.className = "message error";
+      }
+    });
+
+    function openTerms() {
+      document
+        .getElementById("termsModal")
+        .classList.remove("hidden");
+    }
+
+    function closeTerms() {
+      document
+        .getElementById("termsModal")
+        .classList.add("hidden");
+    }
+  </script>
+</body>
+</html>

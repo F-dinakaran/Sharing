@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard | Heartogether</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <nav class="topbar">
+    <div class="logo">♥ Heartogether</div>
+
+    <div class="top-actions">
+      <button id="themeToggle" class="btn secondary small">🌙 Dark</button>
+      <button onclick="logout()" class="btn danger small">Logout</button>
+    </div>
+  </nav>
+
+  <main class="dashboard">
+    <section class="welcome-card">
+      <h1 id="welcomeTitle">Welcome</h1>
+      <p id="welcomeText"></p>
+    </section>
+
+    <section class="dashboard-grid">
+      <a href="chat.html?type=public" class="dash-card">
+        <h2>Community Chat</h2>
+        <p>Join doctors and patients in one supportive Heartogether space.</p>
+      </a>
+
+      <a href="chat.html?type=private" class="dash-card">
+        <h2>Private Chat</h2>
+        <p>Start a confidential one-to-one conversation with a doctor or patient.</p>
+      </a>
+    </section>
+
+    <section id="patientAppointmentPanel" class="doctor-panel hidden">
+      <h2>Request an Appointment</h2>
+      <p class="muted">Choose a doctor and request an appointment time.</p>
+
+      <form id="appointmentForm">
+        <select id="doctorSelect" required>
+          <option value="">Select doctor</option>
+        </select>
+
+        <input type="date" id="appointmentDate" required />
+        <input type="time" id="appointmentTime" required />
+        <input type="text" id="appointmentReason" placeholder="Reason for appointment" required />
+
+        <button class="btn primary full" type="submit">Request Appointment</button>
+      </form>
+
+      <p id="appointmentMessage" class="message"></p>
+    </section>
+
+    <section class="doctor-panel">
+      <h2>My Appointments</h2>
+      <p class="muted">View appointment requests and their status.</p>
+      <div id="appointmentsList" style="margin-top: 20px;"></div>
+    </section>
+
+    <section id="doctorPanel" class="doctor-panel hidden">
+      <h2>Patient Dashboard</h2>
+      <p class="muted">View patients and start private consultations.</p>
+      <div id="patientsList" style="margin-top: 20px;"></div>
+    </section>
+  </main>
+
+  <script>
+    const token = localStorage.getItem("token");
+    const user = JSON.parse(localStorage.getItem("user"));
+    const themeToggle = document.getElementById("themeToggle");
+
+    if (!token || !user) {
+      window.location.href = "login.html";
+    }
+
+    if (localStorage.getItem("theme") === "dark") {
+      document.body.classList.add("dark");
+      themeToggle.textContent = "☀️ Light";
+    }
+
+    themeToggle.addEventListener("click", () => {
+      document.body.classList.toggle("dark");
+
+      if (document.body.classList.contains("dark")) {
+        localStorage.setItem("theme", "dark");
+        themeToggle.textContent = "☀️ Light";
+      } else {
+        localStorage.setItem("theme", "light");
+        themeToggle.textContent = "🌙 Dark";
+      }
+    });
+
+    document.getElementById("welcomeTitle").textContent =
+      `Good morning, ${user.fullName}`;
+
+    document.getElementById("welcomeText").textContent =
+      user.role === "doctor"
+        ? "You are logged in as a doctor. Manage patients, appointments and messages in one calm care space."
+        : "You are logged in as a patient. Message doctors, request appointments and stay connected with support.";
+
+    if (user.role === "doctor") {
+      document.getElementById("doctorPanel").classList.remove("hidden");
+      loadPatients();
+    }
+
+    if (user.role === "patient") {
+      document.getElementById("patientAppointmentPanel").classList.remove("hidden");
+      loadDoctors();
+    }
+
+    loadAppointments();
+
+    async function loadDoctors() {
+      const doctorSelect = document.getElementById("doctorSelect");
+
+      try {
+        const res = await fetch("/api/doctors", {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        const doctors = await res.json();
+
+        doctors.forEach((doctor) => {
+          const option = document.createElement("option");
+          option.value = doctor._id;
+          option.textContent = `${doctor.fullName} ${doctor.speciality ? "- " + doctor.speciality : ""}`;
+          doctorSelect.appendChild(option);
+        });
+      } catch {
+        doctorSelect.innerHTML = "<option>Could not load doctors</option>";
+      }
+    }
+
+    async function loadPatients() {
+      const patientsList = document.getElementById("patientsList");
+
+      try {
+        const res = await fetch("/api/patients", {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        const patients = await res.json();
+        patientsList.innerHTML = "";
+
+        if (!patients.length) {
+          patientsList.innerHTML = "<p class='muted'>No patients registered yet.</p>";
+          return;
+        }
+
+        patients.forEach((patient) => {
+          const div = document.createElement("div");
+          div.className = "patient-card";
+
+          div.innerHTML = `
+            <div>
+              <strong>${patient.fullName}</strong>
+              <p class="muted">${patient.email}</p>
+            </div>
+            <a class="btn primary small" href="chat.html?type=private">Message</a>
+          `;
+
+          patientsList.appendChild(div);
+        });
+      } catch {
+        patientsList.innerHTML = "<p class='message error'>Could not load patients.</p>";
+      }
+    }
+
+    async function loadAppointments() {
+      const appointmentsList = document.getElementById("appointmentsList");
+
+      try {
+        const res = await fetch("/api/appointments", {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        const appointments = await res.json();
+        appointmentsList.innerHTML = "";
+
+        if (!appointments.length) {
+          appointmentsList.innerHTML = "<p class='muted'>No appointments yet.</p>";
+          return;
+        }
+
+        appointments.forEach((appointment) => {
+          const div = document.createElement("div");
+          div.className = "patient-card";
+
+          const otherPerson =
+            user.role === "doctor"
+              ? appointment.patient.fullName
+              : appointment.doctor.fullName;
+
+          div.innerHTML = `
+            <div>
+              <strong>${otherPerson}</strong>
+              <p class="muted">${appointment.date} at ${appointment.time}</p>
+              <p>${appointment.reason}</p>
+              <p><strong>Status:</strong> ${appointment.status}</p>
+            </div>
+
+            ${
+              user.role === "doctor" && appointment.status === "pending"
+                ? `
+                <div>
+                  <button class="btn primary small" onclick="updateAppointmentStatus('${appointment._id}', 'approved')">Approve</button>
+                  <button class="btn danger small" onclick="updateAppointmentStatus('${appointment._id}', 'rejected')">Reject</button>
+                </div>
+                `
+                : ""
+            }
+          `;
+
+          appointmentsList.appendChild(div);
+        });
+      } catch {
+        appointmentsList.innerHTML = "<p class='message error'>Could not load appointments.</p>";
+      }
+    }
+
+    const appointmentForm = document.getElementById("appointmentForm");
+
+    if (appointmentForm) {
+      appointmentForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const message = document.getElementById("appointmentMessage");
+
+        const data = {
+          doctorId: document.getElementById("doctorSelect").value,
+          date: document.getElementById("appointmentDate").value,
+          time: document.getElementById("appointmentTime").value,
+          reason: document.getElementById("appointmentReason").value
+        };
+
+        try {
+          const res = await fetch("/api/appointments", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify(data)
+          });
+
+          const result = await res.json();
+
+          if (!res.ok) {
+            message.textContent = result.message || "Appointment request failed.";
+            message.className = "message error";
+            return;
+          }
+
+          message.textContent = "Appointment requested successfully.";
+          message.className = "message";
+          appointmentForm.reset();
+          loadAppointments();
+        } catch {
+          message.textContent = "Could not connect to server.";
+          message.className = "message error";
+        }
+      });
+    }
+
+    async function updateAppointmentStatus(id, status) {
+      try {
+        await fetch(`/api/appointments/${id}/status`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ status })
+        });
+
+        loadAppointments();
+      } catch {
+        alert("Could not update appointment.");
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      window.location.href = "login.html";
+    }
+  </script>
+</body>
+</html>

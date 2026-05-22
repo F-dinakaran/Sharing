@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat | Heartogether</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <nav class="topbar">
+    <div class="logo">♥ Heartogether</div>
+
+    <div class="top-actions">
+      <button id="themeToggle" class="btn secondary small">🌙 Dark</button>
+      <a href="dashboard.html" class="btn secondary small">Dashboard</a>
+      <button onclick="logout()" class="btn danger small">Logout</button>
+    </div>
+  </nav>
+
+  <main class="chat-layout">
+    <aside class="sidebar">
+      <h3>Chats</h3>
+
+      <input id="searchInput" class="search-input" placeholder="Search users..." />
+
+      <button id="publicChatBtn" class="chat-option active">
+        <span>Community Chat</span>
+        <span id="publicBadge" class="badge hidden">0</span>
+      </button>
+
+      <h4>Private chats</h4>
+      <div id="usersList" class="users-list"></div>
+    </aside>
+
+    <section class="chat-panel">
+      <div class="chat-header">
+        <div>
+          <h2 id="chatTitle">Community Chat</h2>
+          <p id="chatSubtitle">All doctors and patients</p>
+          <p id="typingIndicator" class="typing hidden">Someone is typing...</p>
+        </div>
+      </div>
+
+      <div id="messagesBox" class="messages-box"></div>
+
+      <div class="emoji-row">
+        <button type="button" onclick="addEmoji('❤️')">❤️</button>
+        <button type="button" onclick="addEmoji('😊')">😊</button>
+        <button type="button" onclick="addEmoji('👍')">👍</button>
+        <button type="button" onclick="addEmoji('🙏')">🙏</button>
+        <button type="button" onclick="addEmoji('💊')">💊</button>
+        <button type="button" onclick="addEmoji('🩺')">🩺</button>
+      </div>
+
+      <form id="messageForm" class="message-form">
+        <input
+          type="text"
+          id="messageInput"
+          placeholder="Write your message..."
+          autocomplete="off"
+          required
+        />
+        <button type="submit" class="btn primary">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+
+  <script>
+    const token = localStorage.getItem("token");
+    const user = JSON.parse(localStorage.getItem("user"));
+
+    if (!token || !user) {
+      window.location.href = "login.html";
+    }
+
+    const socket = io();
+
+    const usersList = document.getElementById("usersList");
+    const messagesBox = document.getElementById("messagesBox");
+    const messageForm = document.getElementById("messageForm");
+    const messageInput = document.getElementById("messageInput");
+    const publicChatBtn = document.getElementById("publicChatBtn");
+    const publicBadge = document.getElementById("publicBadge");
+    const chatTitle = document.getElementById("chatTitle");
+    const chatSubtitle = document.getElementById("chatSubtitle");
+    const typingIndicator = document.getElementById("typingIndicator");
+    const searchInput = document.getElementById("searchInput");
+    const themeToggle = document.getElementById("themeToggle");
+
+    let currentChatType = "public";
+    let selectedUser = null;
+    let allUsers = [];
+    let unreadPublic = 0;
+    let unreadPrivate = {};
+    let typingTimer;
+
+    socket.emit("userOnline", { userId: user.id });
+    socket.emit("joinPublicChat");
+
+    if (localStorage.getItem("theme") === "dark") {
+      document.body.classList.add("dark");
+      themeToggle.textContent = "☀️ Light";
+    }
+
+    themeToggle.addEventListener("click", () => {
+      document.body.classList.toggle("dark");
+
+      if (document.body.classList.contains("dark")) {
+        localStorage.setItem("theme", "dark");
+        themeToggle.textContent = "☀️ Light";
+      } else {
+        localStorage.setItem("theme", "light");
+        themeToggle.textContent = "🌙 Dark";
+      }
+    });
+
+    async function loadUsers() {
+      const res = await fetch("/api/users", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      allUsers = await res.json();
+      renderUsers(allUsers);
+    }
+
+    function renderUsers(users) {
+      usersList.innerHTML = "";
+
+      users.forEach((u) => {
+        const button = document.createElement("button");
+        button.className = "user-item";
+        button.dataset.userId = u._id;
+
+        button.innerHTML = `
+          <div class="avatar">${getInitials(u.fullName)}</div>
+          <div class="user-details">
+            <span>${u.fullName}</span>
+            <small>
+              <span class="status-dot ${u.isOnline ? "online" : "offline"}"></span>
+              ${u.role} · ${u.isOnline ? "Online" : "Offline"}
+            </small>
+          </div>
+          <span class="badge private-badge hidden">0</span>
+        `;
+
+        button.addEventListener("click", () => openPrivateChat(u, button));
+        usersList.appendChild(button);
+      });
+    }
+
+    function openPrivateChat(u, button) {
+      selectedUser = u;
+      currentChatType = "private";
+
+      unreadPrivate[u._id] = 0;
+      updatePrivateBadge(u._id);
+
+      document.querySelectorAll(".user-item").forEach((item) => {
+        item.classList.remove("active");
+      });
+
+      button.classList.add("active");
+      publicChatBtn.classList.remove("active");
+
+      chatTitle.textContent = u.fullName;
+      chatSubtitle.textContent =
+        u.role === "doctor"
+          ? "Private chat with doctor"
+          : "Private chat with patient";
+
+      socket.emit("joinPrivateChat", {
+        userId: user.id,
+        otherUserId: u._id
+      });
+
+      loadPrivateMessages(u._id);
+    }
+
+    async function loadPublicMessages() {
+      currentChatType = "public";
+      selectedUser = null;
+      unreadPublic = 0;
+      updatePublicBadge();
+
+      chatTitle.textContent = "Community Chat";
+      chatSubtitle.textContent = "All doctors and patients";
+
+      publicChatBtn.classList.add("active");
+
+      document.querySelectorAll(".user-item").forEach((item) => {
+        item.classList.remove("active");
+      });
+
+      const res = await fetch("/api/messages/public", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      const messages = await res.json();
+      messagesBox.innerHTML = "";
+
+      messages.forEach(addMessageToBox);
+      scrollToBottom();
+    }
+
+    async function loadPrivateMessages(otherUserId) {
+      const res = await fetch(`/api/messages/private/${otherUserId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      const messages = await res.json();
+      messagesBox.innerHTML = "";
+
+      messages.forEach((msg) => {
+        addMessageToBox(msg);
+        if (msg.sender._id !== user.id) {
+          socket.emit("messageSeen", {
+            messageId: msg._id,
+            userId: user.id
+          });
+        }
+      });
+
+      scrollToBottom();
+    }
+
+    function addMessageToBox(message) {
+      const existing = document.querySelector(`[data-message-id="${message._id}"]`);
+      if (existing) existing.remove();
+
+      const senderId = message.sender._id || message.sender;
+      const isMine = senderId === user.id;
+
+      const messageDiv = document.createElement("div");
+      messageDiv.className = isMine ? "message mine" : "message theirs";
+      messageDiv.dataset.messageId = message._id;
+
+      const senderName = message.sender.fullName || user.fullName;
+      const senderRole = message.sender.role || user.role;
+
+      const time = new Date(message.createdAt).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+
+      const seenText =
+        isMine && message.chatType === "private"
+          ? message.seenBy && message.seenBy.length > 1
+            ? "Seen"
+            : "Sent"
+          : "";
+
+      messageDiv.innerHTML = `
+        <div class="message-meta">
+          <strong>${isMine ? "You" : senderName}</strong>
+          <span>${senderRole}</span>
+        </div>
+
+        <p>${escapeHtml(message.text)}</p>
+
+        <div class="message-footer">
+          <small>${time} ${message.edited ? "· edited" : ""} ${seenText ? "· " + seenText : ""}</small>
+
+          ${
+            isMine && !message.deleted
+              ? `
+              <div class="message-actions">
+                <button onclick="editMessage('${message._id}', '${escapeForButton(message.text)}')">Edit</button>
+                <button onclick="deleteMessage('${message._id}')">Delete</button>
+              </div>
+              `
+              : ""
+          }
+        </div>
+      `;
+
+      messagesBox.appendChild(messageDiv);
+      scrollToBottom();
+    }
+
+    messageForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+
+      const text = messageInput.value.trim();
+      if (!text) return;
+
+      if (currentChatType === "public") {
+        socket.emit("sendPublicMessage", {
+          senderId: user.id,
+          text
+        });
+
+        socket.emit("stopTyping", {
+          chatType: "public",
+          userId: user.id
+        });
+      } else {
+        if (!selectedUser) {
+          alert("Please select a private chat first.");
+          return;
+        }
+
+        socket.emit("sendPrivateMessage", {
+          senderId: user.id,
+          receiverId: selectedUser._id,
+          text
+        });
+
+        socket.emit("stopTyping", {
+          chatType: "private",
+          userId: user.id,
+          receiverId: selectedUser._id
+        });
+      }
+
+      messageInput.value = "";
+    });
+
+    messageInput.addEventListener("input", () => {
+      if (currentChatType === "public") {
+        socket.emit("typing", {
+          chatType: "public",
+          userId: user.id,
+          fullName: user.fullName
+        });
+      } else if (selectedUser) {
+        socket.emit("typing", {
+          chatType: "private",
+          userId: user.id,
+          receiverId: selectedUser._id,
+          fullName: user.fullName
+        });
+      }
+
+      clearTimeout(typingTimer);
+
+      typingTimer = setTimeout(() => {
+        socket.emit("stopTyping", {
+          chatType: currentChatType,
+          userId: user.id,
+          receiverId: selectedUser?._id
+        });
+      }, 900);
+    });
+
+    socket.on("typing", ({ fullName }) => {
+      typingIndicator.textContent = `${fullName} is typing...`;
+      typingIndicator.classList.remove("hidden");
+    });
+
+    socket.on("stopTyping", () => {
+      typingIndicator.classList.add("hidden");
+    });
+
+    socket.on("receivePublicMessage", (message) => {
+      if (currentChatType === "public") {
+        addMessageToBox(message);
+      } else {
+        unreadPublic++;
+        updatePublicBadge();
+        notifyUser("New community message", message.text);
+      }
+    });
+
+    socket.on("receivePrivateMessage", (message) => {
+      const senderId = message.sender._id;
+      const receiverId = message.receiver._id;
+
+      const belongsToCurrentChat =
+        currentChatType === "private" &&
+        selectedUser &&
+        (senderId === selectedUser._id || receiverId === selectedUser._id);
+
+      if (belongsToCurrentChat) {
+        addMessageToBox(message);
+
+        if (senderId !== user.id) {
+          socket.emit("messageSeen", {
+            messageId: message._id,
+            userId: user.id
+          });
+        }
+      } else if (senderId !== user.id) {
+        unreadPrivate[senderId] = (unreadPrivate[senderId] || 0) + 1;
+        updatePrivateBadge(senderId);
+        notifyUser(`New message from ${message.sender.fullName}`, message.text);
+      }
+    });
+
+    socket.on("messageSeenUpdate", (message) => {
+      const existing = document.querySelector(`[data-message-id="${message._id}"]`);
+      if (existing) {
+        addMessageToBox(message);
+      }
+    });
+
+    socket.on("messageEdited", (message) => {
+      const existing = document.querySelector(`[data-message-id="${message._id}"]`);
+      if (existing) {
+        addMessageToBox(message);
+      }
+    });
+
+    socket.on("messageDeleted", (message) => {
+      const existing = document.querySelector(`[data-message-id="${message._id}"]`);
+      if (existing) {
+        addMessageToBox(message);
+      }
+    });
+
+    socket.on("onlineStatusChanged", ({ userId, isOnline }) => {
+      const target = allUsers.find((u) => u._id === userId);
+
+      if (target) {
+        target.isOnline = isOnline;
+        renderUsers(allUsers);
+      }
+    });
+
+    publicChatBtn.addEventListener("click", loadPublicMessages);
+
+    searchInput.addEventListener("input", () => {
+      const keyword = searchInput.value.toLowerCase();
+
+      const filtered = allUsers.filter((u) =>
+        u.fullName.toLowerCase().includes(keyword) ||
+        u.role.toLowerCase().includes(keyword)
+      );
+
+      renderUsers(filtered);
+    });
+
+    function editMessage(messageId, oldText) {
+      const newText = prompt("Edit your message:", oldText);
+
+      if (!newText || !newText.trim()) return;
+
+      socket.emit("editMessage", {
+        messageId,
+        newText: newText.trim(),
+        userId: user.id
+      });
+    }
+
+    function deleteMessage(messageId) {
+      const confirmDelete = confirm("Delete this message?");
+
+      if (!confirmDelete) return;
+
+      socket.emit("deleteMessage", {
+        messageId,
+        userId: user.id
+      });
+    }
+
+    function updatePublicBadge() {
+      if (unreadPublic > 0) {
+        publicBadge.textContent = unreadPublic;
+        publicBadge.classList.remove("hidden");
+      } else {
+        publicBadge.classList.add("hidden");
+      }
+    }
+
+    function updatePrivateBadge(userId) {
+      const item = document.querySelector(`[data-user-id="${userId}"]`);
+      if (!item) return;
+
+      const badge = item.querySelector(".private-badge");
+      const count = unreadPrivate[userId] || 0;
+
+      if (count > 0) {
+        badge.textContent = count;
+        badge.classList.remove("hidden");
+      } else {
+        badge.classList.add("hidden");
+      }
+    }
+
+    function addEmoji(emoji) {
+      messageInput.value += emoji;
+      messageInput.focus();
+    }
+
+    function notifyUser(title, body) {
+      if (!("Notification" in window)) return;
+
+      if (Notification.permission === "granted") {
+        new Notification(title, { body });
+      } else if (Notification.permission !== "denied") {
+        Notification.requestPermission();
+      }
+    }
+
+    function getInitials(name) {
+      return name
+        .split(" ")
+        .map((part) => part[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2);
+    }
+
+    function scrollToBottom() {
+      messagesBox.scrollTop = messagesBox.scrollHeight;
+    }
+
+    function logout() {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      window.location.href = "login.html";
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function escapeForButton(text) {
+      return text.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+    }
+
+    loadUsers();
+    loadPublicMessages();
+  </script>
+</body>
+</html>
