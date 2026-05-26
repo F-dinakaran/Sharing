@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 require("dotenv").config();
 
 const express = require("express");
@@ -578,4 +579,19 @@ const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
   console.log(`Heartogether is running on http://localhost:${PORT}`);
+=======
+const express = require("express");
+const cors = require("cors");
+
+const app = express();
+
+app.use(cors());
+
+app.get("/", (req, res) => {
+  res.send("API is working!");
+});
+
+app.listen(3000, "0.0.0.0", () => {
+  console.log("Server running on port 3000");
+>>>>>>> 2d7a0422d166598bc294ceb84e6d144d3741c1fb
 });
