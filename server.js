@@ -10,7 +10,7 @@ const { Server } = require("socket.io");
 const User = require("./models/user");
 const Patient = require("./models/patient");
 const Message = require("./models/message");
-const Appointment = require("./models/appointment");
+const Availability = require("./models/availability");
 
 const app = express();
 const server = http.createServer(app);
@@ -58,13 +58,22 @@ function auth(req, res, next) {
 // REGISTER
 app.post("/api/register", async (req, res) => {
   try {
-    const { fullName, email, password, role, speciality, age, condition, termsAccepted } =
-     req.body;
-     if (!termsAccepted) {
-       return res.status(400).json({
-       message: "You must accept the Terms and Conditions to register.",
-  });
-}
+    const {
+      fullName,
+      email,
+      password,
+      role,
+      speciality,
+      age,
+      condition,
+      termsAccepted,
+    } = req.body;
+
+    if (!termsAccepted) {
+      return res.status(400).json({
+        message: "You must accept the Terms and Conditions to register.",
+      });
+    }
 
     if (!fullName || !email || !password || !role) {
       return res.status(400).json({
@@ -87,13 +96,13 @@ app.post("/api/register", async (req, res) => {
     }
 
     const user = await User.create({
-     fullName,
-     email,
-     password,
-     role,
-     speciality: role === "doctor" ? speciality : "",
-     termsAccepted: true,
-     termsAcceptedAt: new Date(),
+      fullName,
+      email,
+      password,
+      role,
+      speciality: role === "doctor" ? speciality : "",
+      termsAccepted: true,
+      termsAcceptedAt: new Date(),
     });
 
     if (role === "patient") {
@@ -127,12 +136,6 @@ app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({
-        message: "Email and password are required",
-      });
-    }
-
     const user = await User.findOne({ email });
 
     if (!user || !(await user.matchPassword(password))) {
@@ -157,12 +160,6 @@ app.post("/api/login", async (req, res) => {
       error: error.message,
     });
   }
-});
-
-// CURRENT USER
-app.get("/api/me", auth, async (req, res) => {
-  const user = await User.findById(req.user.id).select("-password");
-  res.json(user);
 });
 
 // USERS
@@ -190,41 +187,7 @@ app.get("/api/patients", auth, async (req, res) => {
   res.json(patients);
 });
 
-// ASSIGN PATIENT TO DOCTOR
-app.post("/api/patients/assign-doctor", auth, async (req, res) => {
-  try {
-    const { patientUserId, doctorUserId } = req.body;
-
-    if (req.user.role !== "doctor") {
-      return res.status(403).json({
-        message: "Only doctors can assign patients",
-      });
-    }
-
-    const patientProfile = await Patient.findOne({ user: patientUserId });
-
-    if (!patientProfile) {
-      return res.status(404).json({
-        message: "Patient profile not found",
-      });
-    }
-
-    patientProfile.assignedDoctor = doctorUserId;
-    await patientProfile.save();
-
-    res.json({
-      message: "Patient assigned to doctor successfully",
-      patientProfile,
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: "Could not assign doctor",
-      error: error.message,
-    });
-  }
-});
-
-// PUBLIC MESSAGES
+// MESSAGES
 app.get("/api/messages/public", auth, async (req, res) => {
   const messages = await Message.find({ chatType: "public" })
     .populate("sender", "fullName role avatar")
@@ -233,7 +196,6 @@ app.get("/api/messages/public", auth, async (req, res) => {
   res.json(messages);
 });
 
-// PRIVATE MESSAGES
 app.get("/api/messages/private/:otherUserId", auth, async (req, res) => {
   const roomId = createPrivateRoomId(req.user.id, req.params.otherUserId);
 
@@ -248,110 +210,190 @@ app.get("/api/messages/private/:otherUserId", auth, async (req, res) => {
   res.json(messages);
 });
 
-// CREATE APPOINTMENT REQUEST
-app.post("/api/appointments", auth, async (req, res) => {
+// DOCTOR CREATES AVAILABILITY
+// DOCTOR CREATES AVAILABILITY RANGE
+app.post("/api/availability", auth, async (req, res) => {
   try {
-    const { doctorId, date, time, reason } = req.body;
+    const { date, startTime, endTime, duration } = req.body;
 
-    if (req.user.role !== "patient") {
+    if (req.user.role !== "doctor") {
       return res.status(403).json({
-        message: "Only patients can request appointments",
+        message: "Only doctors can create availability slots.",
       });
     }
 
-    if (!doctorId || !date || !time || !reason) {
+    if (!date || !startTime || !endTime || !duration) {
       return res.status(400).json({
-        message: "Doctor, date, time and reason are required",
+        message: "Date, start time, end time and duration are required.",
       });
     }
 
-    const appointment = await Appointment.create({
-      patient: req.user.id,
-      doctor: doctorId,
-      date,
-      time,
-      reason,
-    });
+    function timeToMinutes(time) {
+      const [hours, minutes] = time.split(":").map(Number);
+      return hours * 60 + minutes;
+    }
 
-    const populatedAppointment = await Appointment.findById(appointment._id)
-      .populate("patient", "fullName email role")
-      .populate("doctor", "fullName email role speciality");
+    function minutesToTime(totalMinutes) {
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+
+      return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+    }
+
+    const start = timeToMinutes(startTime);
+    const end = timeToMinutes(endTime);
+    const slotDuration = Number(duration);
+
+    if (end <= start) {
+      return res.status(400).json({
+        message: "End time must be after start time.",
+      });
+    }
+
+    if (slotDuration <= 0) {
+      return res.status(400).json({
+        message: "Duration must be greater than 0.",
+      });
+    }
+
+    const slotsToCreate = [];
+
+    for (let current = start; current + slotDuration <= end; current += slotDuration) {
+      slotsToCreate.push({
+        doctor: req.user.id,
+        date,
+        time: minutesToTime(current),
+        duration: slotDuration,
+      });
+    }
+
+    if (!slotsToCreate.length) {
+      return res.status(400).json({
+        message: "The selected time range is too short for this appointment length.",
+      });
+    }
+
+    const createdSlots = await Availability.insertMany(slotsToCreate);
 
     res.status(201).json({
-      message: "Appointment requested successfully",
-      appointment: populatedAppointment,
+      message: `${createdSlots.length} availability slots created.`,
+      slots: createdSlots,
     });
   } catch (error) {
     res.status(500).json({
-      message: "Could not create appointment",
+      message: "Could not create availability slots.",
       error: error.message,
     });
   }
 });
 
-// GET MY APPOINTMENTS
-app.get("/api/appointments", auth, async (req, res) => {
+// GET AVAILABLE SLOTS FOR PATIENTS
+app.get("/api/availability/available", auth, async (req, res) => {
+  try {
+    const slots = await Availability.find({ status: "available" })
+      .populate("doctor", "fullName speciality email")
+      .sort({ date: 1, time: 1 });
+
+    res.json(slots);
+  } catch (error) {
+    res.status(500).json({
+      message: "Could not load available slots.",
+      error: error.message,
+    });
+  }
+});
+
+// GET MY SLOTS/APPOINTMENTS
+app.get("/api/availability/my", auth, async (req, res) => {
   try {
     const filter =
       req.user.role === "doctor"
         ? { doctor: req.user.id }
-        : { patient: req.user.id };
+        : { bookedBy: req.user.id };
 
-    const appointments = await Appointment.find(filter)
-      .populate("patient", "fullName email role")
-      .populate("doctor", "fullName email role speciality")
-      .sort({ createdAt: -1 });
+    const slots = await Availability.find(filter)
+      .populate("doctor", "fullName speciality email")
+      .populate("bookedBy", "fullName email role")
+      .sort({ date: 1, time: 1 });
 
-    res.json(appointments);
+    res.json(slots);
   } catch (error) {
     res.status(500).json({
-      message: "Could not load appointments",
+      message: "Could not load appointments.",
       error: error.message,
     });
   }
 });
 
-// APPROVE OR REJECT APPOINTMENT
-app.patch("/api/appointments/:id/status", auth, async (req, res) => {
+// PATIENT BOOKS AVAILABLE SLOT
+app.patch("/api/availability/:id/book", auth, async (req, res) => {
   try {
-    const { status } = req.body;
+    const { reason } = req.body;
 
-    if (req.user.role !== "doctor") {
+    if (req.user.role !== "patient") {
       return res.status(403).json({
-        message: "Only doctors can update appointment status",
+        message: "Only patients can book appointments.",
       });
     }
 
-    if (!["approved", "rejected"].includes(status)) {
-      return res.status(400).json({
-        message: "Status must be approved or rejected",
-      });
-    }
-
-    const appointment = await Appointment.findOneAndUpdate(
+    const slot = await Availability.findOneAndUpdate(
       {
         _id: req.params.id,
-        doctor: req.user.id,
+        status: "available",
       },
-      { status },
+      {
+        status: "booked",
+        bookedBy: req.user.id,
+        reason: reason || "",
+      },
       { new: true }
     )
-      .populate("patient", "fullName email role")
-      .populate("doctor", "fullName email role speciality");
+      .populate("doctor", "fullName speciality email")
+      .populate("bookedBy", "fullName email role");
 
-    if (!appointment) {
+    if (!slot) {
       return res.status(404).json({
-        message: "Appointment not found",
+        message: "This slot is no longer available.",
       });
     }
 
     res.json({
-      message: `Appointment ${status}`,
-      appointment,
+      message: "Appointment booked successfully.",
+      slot,
     });
   } catch (error) {
     res.status(500).json({
-      message: "Could not update appointment",
+      message: "Could not book appointment.",
+      error: error.message,
+    });
+  }
+});
+
+// DOCTOR DELETES AVAILABLE SLOT
+app.delete("/api/availability/:id", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "doctor") {
+      return res.status(403).json({
+        message: "Only doctors can delete slots.",
+      });
+    }
+
+    const slot = await Availability.findOneAndDelete({
+      _id: req.params.id,
+      doctor: req.user.id,
+      status: "available",
+    });
+
+    if (!slot) {
+      return res.status(404).json({
+        message: "Slot not found or already booked.",
+      });
+    }
+
+    res.json({ message: "Availability slot deleted." });
+  } catch (error) {
+    res.status(500).json({
+      message: "Could not delete slot.",
       error: error.message,
     });
   }
@@ -515,8 +557,6 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", async () => {
     try {
-      console.log("Socket disconnected:", socket.id);
-
       if (socket.userId) {
         await User.findByIdAndUpdate(socket.userId, {
           isOnline: false,
@@ -537,5 +577,5 @@ io.on("connection", (socket) => {
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
-  console.log(`CardioCare Chat is running on http://localhost:${PORT}`);
+  console.log(`Heartogether is running on http://localhost:${PORT}`);
 });

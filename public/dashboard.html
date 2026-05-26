@@ -6,6 +6,7 @@
   <title>Dashboard | Heartogether</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
   <nav class="topbar">
     <div class="logo">♥ Heartogether</div>
@@ -34,29 +35,44 @@
       </a>
     </section>
 
-    <section id="patientAppointmentPanel" class="doctor-panel hidden">
-      <h2>Request an Appointment</h2>
-      <p class="muted">Choose a doctor and request an appointment time.</p>
+    <section id="doctorAvailabilityPanel" class="doctor-panel hidden">
+      <h2>Add Availability</h2>
+      <p class="muted">
+        Choose a time range and Heartogether will automatically create bookable appointment slots.
+      </p>
 
-      <form id="appointmentForm">
-        <select id="doctorSelect" required>
-          <option value="">Select doctor</option>
+      <form id="availabilityForm">
+        <input type="date" id="slotDate" required />
+
+        <input type="time" id="slotStartTime" required />
+        <input type="time" id="slotEndTime" required />
+
+        <select id="slotDuration">
+          <option value="15">15 minutes per appointment</option>
+          <option value="30" selected>30 minutes per appointment</option>
+          <option value="45">45 minutes per appointment</option>
+          <option value="60">60 minutes per appointment</option>
         </select>
 
-        <input type="date" id="appointmentDate" required />
-        <input type="time" id="appointmentTime" required />
-        <input type="text" id="appointmentReason" placeholder="Reason for appointment" required />
-
-        <button class="btn primary full" type="submit">Request Appointment</button>
+        <button class="btn primary full" type="submit">
+          Create Availability Slots
+        </button>
       </form>
 
-      <p id="appointmentMessage" class="message"></p>
+      <p id="availabilityMessage" class="message"></p>
+    </section>
+
+    <section id="patientBookingPanel" class="doctor-panel hidden">
+      <h2>Book an Appointment</h2>
+      <p class="muted">Choose an available doctor slot and book your appointment.</p>
+
+      <div id="availableSlotsList" style="margin-top: 20px;"></div>
     </section>
 
     <section class="doctor-panel">
-      <h2>My Appointments</h2>
-      <p class="muted">View appointment requests and their status.</p>
-      <div id="appointmentsList" style="margin-top: 20px;"></div>
+      <h2 id="mySlotsTitle">My Appointments</h2>
+      <p class="muted" id="mySlotsText">View your appointment slots and bookings.</p>
+      <div id="mySlotsList" style="margin-top: 20px;"></div>
     </section>
 
     <section id="doctorPanel" class="doctor-panel hidden">
@@ -97,39 +113,225 @@
 
     document.getElementById("welcomeText").textContent =
       user.role === "doctor"
-        ? "You are logged in as a doctor. Manage patients, appointments and messages in one calm care space."
-        : "You are logged in as a patient. Message doctors, request appointments and stay connected with support.";
+        ? "You are logged in as a doctor. Add availability ranges, manage bookings and support patients."
+        : "You are logged in as a patient. Book available doctor slots, message doctors and stay connected.";
 
     if (user.role === "doctor") {
+      document.getElementById("doctorAvailabilityPanel").classList.remove("hidden");
       document.getElementById("doctorPanel").classList.remove("hidden");
+      document.getElementById("mySlotsTitle").textContent = "My Availability & Bookings";
+      document.getElementById("mySlotsText").textContent = "View your available and booked appointment slots.";
       loadPatients();
     }
 
     if (user.role === "patient") {
-      document.getElementById("patientAppointmentPanel").classList.remove("hidden");
-      loadDoctors();
+      document.getElementById("patientBookingPanel").classList.remove("hidden");
+      document.getElementById("mySlotsTitle").textContent = "My Booked Appointments";
+      document.getElementById("mySlotsText").textContent = "View the doctor appointments you have booked.";
+      loadAvailableSlots();
     }
 
-    loadAppointments();
+    loadMySlots();
 
-    async function loadDoctors() {
-      const doctorSelect = document.getElementById("doctorSelect");
+    const availabilityForm = document.getElementById("availabilityForm");
+
+    if (availabilityForm) {
+      availabilityForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const message = document.getElementById("availabilityMessage");
+
+        const data = {
+          date: document.getElementById("slotDate").value,
+          startTime: document.getElementById("slotStartTime").value,
+          endTime: document.getElementById("slotEndTime").value,
+          duration: document.getElementById("slotDuration").value
+        };
+
+        try {
+          const res = await fetch("/api/availability", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify(data)
+          });
+
+          const result = await res.json();
+
+          if (!res.ok) {
+            message.textContent = result.message || "Could not create availability slots.";
+            message.className = "message error";
+            return;
+          }
+
+          message.textContent = result.message || "Availability slots created.";
+          message.className = "message";
+          availabilityForm.reset();
+          loadMySlots();
+        } catch {
+          message.textContent = "Could not connect to server.";
+          message.className = "message error";
+        }
+      });
+    }
+
+    async function loadAvailableSlots() {
+      const list = document.getElementById("availableSlotsList");
 
       try {
-        const res = await fetch("/api/doctors", {
+        const res = await fetch("/api/availability/available", {
           headers: { Authorization: `Bearer ${token}` }
         });
 
-        const doctors = await res.json();
+        const slots = await res.json();
+        list.innerHTML = "";
 
-        doctors.forEach((doctor) => {
-          const option = document.createElement("option");
-          option.value = doctor._id;
-          option.textContent = `${doctor.fullName} ${doctor.speciality ? "- " + doctor.speciality : ""}`;
-          doctorSelect.appendChild(option);
+        if (!slots.length) {
+          list.innerHTML = "<p class='muted'>No available doctor slots yet.</p>";
+          return;
+        }
+
+        slots.forEach((slot) => {
+          const div = document.createElement("div");
+          div.className = "patient-card";
+
+          div.innerHTML = `
+            <div>
+              <strong>${slot.doctor.fullName}</strong>
+              <p class="muted">${slot.doctor.speciality || "Doctor"}</p>
+              <p>${slot.date} at ${slot.time} · ${slot.duration} minutes</p>
+              <input
+                type="text"
+                id="reason-${slot._id}"
+                placeholder="Reason for appointment"
+                style="margin-top: 10px;"
+              />
+            </div>
+
+            <button class="btn primary small" onclick="bookSlot('${slot._id}')">
+              Book
+            </button>
+          `;
+
+          list.appendChild(div);
         });
       } catch {
-        doctorSelect.innerHTML = "<option>Could not load doctors</option>";
+        list.innerHTML = "<p class='message error'>Could not load available slots.</p>";
+      }
+    }
+
+    async function bookSlot(slotId) {
+      const reasonInput = document.getElementById(`reason-${slotId}`);
+      const reason = reasonInput ? reasonInput.value : "";
+
+      try {
+        const res = await fetch(`/api/availability/${slotId}/book`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ reason })
+        });
+
+        const result = await res.json();
+
+        if (!res.ok) {
+          alert(result.message || "Could not book slot.");
+          return;
+        }
+
+        alert("Appointment booked successfully.");
+        loadAvailableSlots();
+        loadMySlots();
+      } catch {
+        alert("Could not connect to server.");
+      }
+    }
+
+    async function loadMySlots() {
+      const list = document.getElementById("mySlotsList");
+
+      try {
+        const res = await fetch("/api/availability/my", {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        const slots = await res.json();
+        list.innerHTML = "";
+
+        if (!slots.length) {
+          list.innerHTML = "<p class='muted'>No appointments yet.</p>";
+          return;
+        }
+
+        slots.forEach((slot) => {
+          const div = document.createElement("div");
+          div.className = "patient-card";
+
+          const statusText =
+            slot.status === "available"
+              ? "Available"
+              : `Booked by ${slot.bookedBy ? slot.bookedBy.fullName : "patient"}`;
+
+          div.innerHTML = `
+            <div>
+              <strong>
+                ${
+                  user.role === "doctor"
+                    ? statusText
+                    : slot.doctor.fullName
+                }
+              </strong>
+
+              <p class="muted">${slot.date} at ${slot.time} · ${slot.duration} minutes</p>
+
+              ${
+                slot.reason
+                  ? `<p><strong>Reason:</strong> ${slot.reason}</p>`
+                  : ""
+              }
+
+              <p><strong>Status:</strong> ${slot.status}</p>
+            </div>
+
+            ${
+              user.role === "doctor" && slot.status === "available"
+                ? `<button class="btn danger small" onclick="deleteSlot('${slot._id}')">Delete</button>`
+                : ""
+            }
+          `;
+
+          list.appendChild(div);
+        });
+      } catch {
+        list.innerHTML = "<p class='message error'>Could not load appointments.</p>";
+      }
+    }
+
+    async function deleteSlot(slotId) {
+      const confirmDelete = confirm("Delete this available slot?");
+
+      if (!confirmDelete) return;
+
+      try {
+        const res = await fetch(`/api/availability/${slotId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        const result = await res.json();
+
+        if (!res.ok) {
+          alert(result.message || "Could not delete slot.");
+          return;
+        }
+
+        loadMySlots();
+      } catch {
+        alert("Could not connect to server.");
       }
     }
 
@@ -165,119 +367,6 @@
         });
       } catch {
         patientsList.innerHTML = "<p class='message error'>Could not load patients.</p>";
-      }
-    }
-
-    async function loadAppointments() {
-      const appointmentsList = document.getElementById("appointmentsList");
-
-      try {
-        const res = await fetch("/api/appointments", {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-
-        const appointments = await res.json();
-        appointmentsList.innerHTML = "";
-
-        if (!appointments.length) {
-          appointmentsList.innerHTML = "<p class='muted'>No appointments yet.</p>";
-          return;
-        }
-
-        appointments.forEach((appointment) => {
-          const div = document.createElement("div");
-          div.className = "patient-card";
-
-          const otherPerson =
-            user.role === "doctor"
-              ? appointment.patient.fullName
-              : appointment.doctor.fullName;
-
-          div.innerHTML = `
-            <div>
-              <strong>${otherPerson}</strong>
-              <p class="muted">${appointment.date} at ${appointment.time}</p>
-              <p>${appointment.reason}</p>
-              <p><strong>Status:</strong> ${appointment.status}</p>
-            </div>
-
-            ${
-              user.role === "doctor" && appointment.status === "pending"
-                ? `
-                <div>
-                  <button class="btn primary small" onclick="updateAppointmentStatus('${appointment._id}', 'approved')">Approve</button>
-                  <button class="btn danger small" onclick="updateAppointmentStatus('${appointment._id}', 'rejected')">Reject</button>
-                </div>
-                `
-                : ""
-            }
-          `;
-
-          appointmentsList.appendChild(div);
-        });
-      } catch {
-        appointmentsList.innerHTML = "<p class='message error'>Could not load appointments.</p>";
-      }
-    }
-
-    const appointmentForm = document.getElementById("appointmentForm");
-
-    if (appointmentForm) {
-      appointmentForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-
-        const message = document.getElementById("appointmentMessage");
-
-        const data = {
-          doctorId: document.getElementById("doctorSelect").value,
-          date: document.getElementById("appointmentDate").value,
-          time: document.getElementById("appointmentTime").value,
-          reason: document.getElementById("appointmentReason").value
-        };
-
-        try {
-          const res = await fetch("/api/appointments", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`
-            },
-            body: JSON.stringify(data)
-          });
-
-          const result = await res.json();
-
-          if (!res.ok) {
-            message.textContent = result.message || "Appointment request failed.";
-            message.className = "message error";
-            return;
-          }
-
-          message.textContent = "Appointment requested successfully.";
-          message.className = "message";
-          appointmentForm.reset();
-          loadAppointments();
-        } catch {
-          message.textContent = "Could not connect to server.";
-          message.className = "message error";
-        }
-      });
-    }
-
-    async function updateAppointmentStatus(id, status) {
-      try {
-        await fetch(`/api/appointments/${id}/status`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify({ status })
-        });
-
-        loadAppointments();
-      } catch {
-        alert("Could not update appointment.");
       }
     }
 
